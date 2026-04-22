@@ -54,3 +54,4 @@
 # - github.repo
 
 dolt.shared-server: true
+sync-branch: "beads-sync"

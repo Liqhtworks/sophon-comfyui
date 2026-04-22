@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comfyui-sophon"
+version = "0.1.0"
+description = "Sophon HEVC encoding API nodes for ComfyUI (by Liqhtworks)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Otaku Solutions" }]
+dependencies = ["requests>=2.31"]
+
+[project.urls]
+Homepage = "https://sophon.liqhtworks.xyz"
+Repository = "https://github.com/hamchowderr/ComfyUI-Sophon"
+Documentation = "https://registry.scalar.com/@liqhtworks/apis/sophon-encoding-api"
+
+[tool.comfy]
+PublisherId = "otaku-solutions"
+DisplayName = "Sophon"
+Icon = ""
+includes = []
+
+[project.entry-points."comfyui.custom_nodes"]
+comfyui_sophon = "comfyui_sophon:comfy_entrypoint"
+
+[tool.setuptools.packages.find]
+include = ["comfyui_sophon*"]
