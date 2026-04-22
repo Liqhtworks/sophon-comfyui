@@ -112,7 +112,7 @@ Anything that doesn't work — missing field, bad error, crash, unexpected outpu
 - Exact node settings used
 - Full error text from the ComfyUI console
 
-Maintainer pushes a fix → re-run `python ComfyUI-Sophon/scripts/install.py` to pull the latest and re-register.
+Maintainer pushes a fix → re-run `python ComfyUI-Sophon/scripts/install.py` — it hard-resets your local checkout to `origin/main` and re-registers, so everyone stays in sync. Any accidental local edits are discarded on re-install (by design — this repo is code-read-only for the team).
 
 ---
 

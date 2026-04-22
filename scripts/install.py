@@ -96,10 +96,13 @@ def main() -> int:
 
     if target.exists():
         if (target / ".git").is_dir():
-            print("Existing checkout found — pulling latest.")
-            run(["git", "fetch", "--all"], cwd=target)
+            print("Existing checkout found — resetting to latest origin/" + args.branch + ".")
+            # Teammates are consumers, not contributors — overwrite any local drift
+            # (stray .pyc caches, accidental edits) so every machine stays in sync.
+            run(["git", "fetch", "origin", args.branch], cwd=target)
             run(["git", "checkout", args.branch], cwd=target)
-            run(["git", "pull", "--ff-only"], cwd=target)
+            run(["git", "reset", "--hard", f"origin/{args.branch}"], cwd=target)
+            run(["git", "clean", "-fd"], cwd=target)
         else:
             print("Existing non-git folder found — removing and re-cloning.")
             shutil.rmtree(target)
