@@ -119,7 +119,7 @@ function setVideoSrc(node, url) {
 
 function onExecutedMessage(node, message) {
     const entries = message.sophon_video || [];
-    const statsLines = message.text || [];
+    const statsLines = message.sophon_stats || [];
     if (!entries.length && !statsLines.length) return;
     const dom = ensureVideoDom(node);
     if (entries.length) setVideoSrc(node, buildViewUrl(entries[0]));
