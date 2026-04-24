@@ -14,6 +14,9 @@ const SOURCE_PREVIEW_NODES = new Set([
     "SophonEncodeVideo",
 ]);
 
+// Nodes that render side-by-side comparison of two videos.
+const COMPARE_NODES = new Set(["SophonCompare"]);
+
 function buildViewUrl(entry) {
     const p = new URLSearchParams();
     p.set("filename", entry.filename);
@@ -144,6 +147,201 @@ function setVideoSrc(node, url) {
     relayout(node);
 }
 
+function ensureCompareDom(node) {
+    if (node._sophonCompareDom?.container?.isConnected) return node._sophonCompareDom;
+    if (node._sophonCompareDom) node._sophonCompareDom = null;
+    cleanupOrphanElements();
+
+    const container = document.createElement("div");
+    container.dataset.sophonPreview = "1";
+    container.dataset.sophonNodeId = String(node.id);
+    container.style.display = "flex";
+    container.style.flexDirection = "column";
+    container.style.padding = "4px";
+    container.style.boxSizing = "border-box";
+    container.style.width = "100%";
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.gap = "4px";
+    row.style.width = "100%";
+    container.appendChild(row);
+
+    const makeSide = () => {
+        const wrap = document.createElement("div");
+        wrap.style.flex = "1 1 0";
+        wrap.style.minWidth = "0";
+        wrap.style.display = "flex";
+        wrap.style.flexDirection = "column";
+        wrap.style.alignItems = "center";
+
+        const label = document.createElement("div");
+        label.style.fontFamily = "monospace";
+        label.style.fontSize = "11px";
+        label.style.color = "#ddd";
+        label.style.padding = "0 0 2px 0";
+        label.textContent = "";
+        wrap.appendChild(label);
+
+        const video = document.createElement("video");
+        video.controls = true;
+        video.playsInline = true;
+        video.muted = true;
+        video.loop = true;
+        video.preload = "metadata";
+        video.style.width = "100%";
+        video.style.height = "auto";
+        video.style.display = "block";
+        video.style.background = "#000";
+        wrap.appendChild(video);
+
+        const stats = document.createElement("pre");
+        stats.style.margin = "2px 0 0 0";
+        stats.style.padding = "3px 6px";
+        stats.style.fontFamily = "monospace";
+        stats.style.fontSize = "10px";
+        stats.style.lineHeight = "1.3";
+        stats.style.whiteSpace = "pre-wrap";
+        stats.style.color = "#ddd";
+        stats.style.background = "rgba(0,0,0,0.25)";
+        stats.style.borderRadius = "3px";
+        stats.style.width = "100%";
+        stats.style.boxSizing = "border-box";
+        stats.style.textAlign = "center";
+        stats.textContent = "";
+        wrap.appendChild(stats);
+
+        row.appendChild(wrap);
+        return { wrap, label, video, stats };
+    };
+    const left = makeSide();
+    const right = makeSide();
+
+    const savings = document.createElement("pre");
+    savings.style.margin = "4px 0 0 0";
+    savings.style.padding = "4px 6px";
+    savings.style.fontFamily = "monospace";
+    savings.style.fontSize = "11px";
+    savings.style.color = "#8df28d";
+    savings.style.background = "rgba(0,0,0,0.3)";
+    savings.style.borderRadius = "3px";
+    savings.style.textAlign = "center";
+    savings.textContent = "";
+    container.appendChild(savings);
+
+    // Playback sync — guard against re-entrance so mirroring one event onto
+    // the other <video> doesn't bounce back and cause a feedback loop.
+    let syncing = false;
+    const mirror = (src, dst, fn) => {
+        if (syncing) return;
+        syncing = true;
+        try { fn(src, dst); } finally { syncing = false; }
+    };
+    const pair = [left.video, right.video];
+    pair.forEach((v, i) => {
+        const other = pair[1 - i];
+        v.addEventListener("play", () =>
+            mirror(v, other, (s, d) => { if (d.paused) d.play().catch(() => {}); }));
+        v.addEventListener("pause", () =>
+            mirror(v, other, (s, d) => { if (!d.paused) d.pause(); }));
+        v.addEventListener("seeked", () =>
+            mirror(v, other, (s, d) => { if (Math.abs(d.currentTime - s.currentTime) > 0.03) d.currentTime = s.currentTime; }));
+        v.addEventListener("ratechange", () =>
+            mirror(v, other, (s, d) => { if (d.playbackRate !== s.playbackRate) d.playbackRate = s.playbackRate; }));
+    });
+
+    const widget = node.addDOMWidget("sophon_compare", "preview", container, {
+        serialize: false,
+        hideOnZoom: false,
+    });
+    const measure = () => {
+        const width = Math.max(320, node.size?.[0] || 512);
+        const aspect = node._sophonCompareAspect || 16 / 9;
+        // Each video takes half the inner width minus the gap, minus padding.
+        const inner = Math.max(120, width - 8);
+        const perVideoW = (inner - 4) / 2;
+        const perVideoH = Math.round(perVideoW / aspect);
+        const labelH = 14;
+        const statsH = 30; // 2 lines of per-side stats
+        const savingsH = 22; // savings summary row
+        const height = labelH + perVideoH + statsH + savingsH + 12;
+        return { width, height };
+    };
+    widget.computeSize = function () {
+        const { width, height } = measure();
+        return [width, height];
+    };
+    widget.computeLayoutSize = function () {
+        const { width, height } = measure();
+        return { minHeight: height, minWidth: Math.min(width, 320) };
+    };
+
+    node._sophonCompareDom = { container, left, right, savings, widget };
+    return node._sophonCompareDom;
+}
+
+function fmtBytes(n) {
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return i === 0 ? `${n} B` : `${v.toFixed(2)} ${units[i]}`;
+}
+
+function fmtKbps(v) {
+    if (!Number.isFinite(v) || v <= 0) return "—";
+    return `${Math.round(v).toLocaleString()} kbps`;
+}
+
+function onCompareMessage(node, message) {
+    const entries = message.sophon_compare || [];
+    if (!entries.length) return;
+    const entry = entries[0];
+    const {
+        left: leftSrc,
+        right: rightSrc,
+        label_left,
+        label_right,
+        size_left,
+        size_right,
+        bitrate_left_kbps,
+        bitrate_right_kbps,
+        savings_pct,
+    } = entry;
+    const dom = ensureCompareDom(node);
+    dom.left.label.textContent = label_left || "left";
+    dom.right.label.textContent = label_right || "right";
+    if (leftSrc) dom.left.video.src = buildViewUrl(leftSrc);
+    if (rightSrc) dom.right.video.src = buildViewUrl(rightSrc);
+
+    dom.left.stats.textContent =
+        `${fmtBytes(size_left)}\n${fmtKbps(bitrate_left_kbps)}`;
+    dom.right.stats.textContent =
+        `${fmtBytes(size_right)}\n${fmtKbps(bitrate_right_kbps)}`;
+
+    if (Number.isFinite(savings_pct)) {
+        // Negative savings = bigger output; show both cases with the right color.
+        const sign = savings_pct >= 0 ? "" : "";
+        dom.savings.style.color = savings_pct >= 0 ? "#8df28d" : "#f28d8d";
+        dom.savings.textContent = `Savings: ${sign}${savings_pct.toFixed(1)}%`;
+    } else {
+        dom.savings.textContent = "";
+    }
+    // First <loadedmetadata> wins for aspect — we render at a shared ratio so
+    // both videos frame identically even if one is slightly off.
+    const onMeta = (v) => {
+        if (!v.videoWidth || !v.videoHeight) return;
+        if (!node._sophonCompareAspect) {
+            node._sophonCompareAspect = v.videoWidth / v.videoHeight;
+            relayout(node);
+        }
+    };
+    dom.left.video.addEventListener("loadedmetadata", () => onMeta(dom.left.video), { once: true });
+    dom.right.video.addEventListener("loadedmetadata", () => onMeta(dom.right.video), { once: true });
+    relayout(node);
+}
+
 function onExecutedMessage(node, message) {
     const entries = message.sophon_video || [];
     const statsLines = message.sophon_stats || [];
@@ -222,6 +420,14 @@ app.registerExtension({
             };
         }
 
+        if (COMPARE_NODES.has(name)) {
+            const origOnExecuted = nodeType.prototype.onExecuted;
+            nodeType.prototype.onExecuted = function (message) {
+                origOnExecuted?.apply(this, arguments);
+                if (message) onCompareMessage(this, message);
+            };
+        }
+
         if (SOURCE_PREVIEW_NODES.has(name)) {
             const origOnNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function () {
@@ -236,6 +442,10 @@ app.registerExtension({
             if (this._sophonDom?.container) {
                 this._sophonDom.container.remove();
                 this._sophonDom = null;
+            }
+            if (this._sophonCompareDom?.container) {
+                this._sophonCompareDom.container.remove();
+                this._sophonCompareDom = null;
             }
             origOnRemoved?.apply(this, arguments);
         };

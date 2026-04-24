@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
-from comfy_api.latest import ComfyExtension, io
+from comfy_api.latest import ComfyExtension, VideoFromFile, io
+from comfy_api.latest._util import VideoContainer
 
 from .client import SophonClient
 
@@ -161,6 +164,36 @@ def _resolve_video_path(video: str) -> str:
     raise FileNotFoundError(f"Video not found: {video}")
 
 
+def _fetch_video_from_url(url: str) -> VideoFromFile:
+    """Download a (signed) URL into memory and wrap as VideoFromFile. Used when
+    the user opted out of saving the encoded output to disk but we still need a
+    VIDEO output for the graph."""
+    import io as _stdio
+
+    import requests
+
+    r = requests.get(url, timeout=60)
+    r.raise_for_status()
+    return VideoFromFile(_stdio.BytesIO(r.content))
+
+
+def _materialize_video_input(video_input: Any) -> str:
+    """Save an upstream ComfyUI VideoInput to a temp .mp4 and return the path.
+    Caller owns the file and must unlink when done. save_to copies streams when
+    the source is already mp4/h264, so this is usually cheap."""
+    fd, tmp_path = tempfile.mkstemp(suffix=".mp4", prefix="sophon_vidin_")
+    os.close(fd)
+    try:
+        video_input.save_to(tmp_path, format=VideoContainer.MP4)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return tmp_path
+
+
 def _client(api_key: str) -> SophonClient:
     return SophonClient.from_env(override=api_key or None)
 
@@ -195,7 +228,12 @@ class SophonUpload(io.ComfyNode):
                     options=_list_input_videos(),
                     upload=io.UploadType.video,
                     image_folder=io.FolderType.input,
-                    tooltip="Video from ComfyUI input/ folder, or click 'choose file to upload'.",
+                    tooltip="Video from ComfyUI input/ folder. Ignored when 'video_input' is connected.",
+                ),
+                io.Video.Input(
+                    "video_input",
+                    optional=True,
+                    tooltip="Connect a VIDEO output from an upstream node (e.g. Seedance). Takes precedence over 'video'.",
                 ),
                 io.String.Input("mime_type", multiline=False, default="video/mp4"),
                 io.String.Input("api_key", multiline=False, default="", tooltip="Bearer API key. Leave empty to use $SOPHON_API_KEY."),
@@ -208,10 +246,15 @@ class SophonUpload(io.ComfyNode):
         return _nonce()
 
     @classmethod
-    def execute(cls, video: str, mime_type: str, api_key: str) -> io.NodeOutput:
+    def execute(cls, video: str, mime_type: str, api_key: str, video_input: Any = None) -> io.NodeOutput:
         client = _client(api_key)
-        path = _resolve_video_path(video)
-        # Determine part count for progress bar
+        tmp_path: str | None = None
+        if video_input is not None:
+            tmp_path = _materialize_video_input(video_input)
+            path = tmp_path
+            mime_type = "video/mp4"
+        else:
+            path = _resolve_video_path(video)
         size = Path(path).stat().st_size
         # We don't know chunk_size until create_upload — use a two-phase approach.
         pbar_holder = {"bar": None}
@@ -223,7 +266,14 @@ class SophonUpload(io.ComfyNode):
             if bar is not None:
                 bar.update_absolute(done, total)
 
-        upload_id = client.upload_file(path, mime_type=mime_type, progress_cb=cb)
+        try:
+            upload_id = client.upload_file(path, mime_type=mime_type, progress_cb=cb)
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
         return io.NodeOutput(upload_id)
 
 
@@ -352,6 +402,7 @@ class SophonDownloadOutput(io.ComfyNode):
             outputs=[
                 io.String.Output(display_name="output_url"),
                 io.String.Output(display_name="local_path"),
+                io.Video.Output(display_name="video"),
             ],
         )
 
@@ -363,14 +414,19 @@ class SophonDownloadOutput(io.ComfyNode):
     def execute(cls, job_id: str, download: bool, output_dir: str, api_key: str) -> io.NodeOutput:
         client = _client(api_key)
         url = client.get_output_url(job_id)
-        local = ""
         job = client.get_job(job_id)
         if download:
             local = client.download_output(job_id, _resolve_output_dir(output_dir))
+            video = VideoFromFile(local)
+        else:
+            # Ensure the VIDEO output is always valid: fetch bytes in-memory when
+            # the user opted out of writing to disk.
+            local = ""
+            video = _fetch_video_from_url(url)
         payload = _build_preview_ui(local, job)
         if payload is not None:
-            return io.NodeOutput(url, local, ui=payload)
-        return io.NodeOutput(url, local)
+            return io.NodeOutput(url, local, video, ui=payload)
+        return io.NodeOutput(url, local, video)
 
 
 # ─── SophonEncodeVideo (one-shot convenience) ────────────────────────────
@@ -390,7 +446,12 @@ class SophonEncodeVideo(io.ComfyNode):
                     options=_list_input_videos(),
                     upload=io.UploadType.video,
                     image_folder=io.FolderType.input,
-                    tooltip="Video from ComfyUI input/ folder, or click 'choose file to upload'.",
+                    tooltip="Video from ComfyUI input/ folder. Ignored when 'video_input' is connected.",
+                ),
+                io.Video.Input(
+                    "video_input",
+                    optional=True,
+                    tooltip="Connect a VIDEO output from an upstream node (e.g. Seedance). Takes precedence over 'video'.",
                 ),
                 io.Combo.Input("profile", options=PROFILES, default="sophon-cortado"),
                 io.Combo.Input("container", options=["mp4", "mkv"], default="mp4"),
@@ -405,6 +466,7 @@ class SophonEncodeVideo(io.ComfyNode):
                 io.String.Output(display_name="job_id"),
                 io.String.Output(display_name="output_url"),
                 io.String.Output(display_name="local_path"),
+                io.Video.Output(display_name="video"),
             ],
         )
 
@@ -424,9 +486,15 @@ class SophonEncodeVideo(io.ComfyNode):
         poll_interval: int,
         timeout_seconds: int,
         api_key: str,
+        video_input: Any = None,
     ) -> io.NodeOutput:
         client = _client(api_key)
-        path = _resolve_video_path(video)
+        tmp_path: str | None = None
+        if video_input is not None:
+            tmp_path = _materialize_video_input(video_input)
+            path = tmp_path
+        else:
+            path = _resolve_video_path(video)
 
         # Two-phase progress bar: 0-50% upload, 50-100% encode.
         upload_pbar = {"bar": None}
@@ -438,7 +506,14 @@ class SophonEncodeVideo(io.ComfyNode):
             if bar is not None:
                 bar.update_absolute(int(50 * done / max(total, 1)), 100)
 
-        upload_id = client.upload_file(path, progress_cb=upload_cb)
+        try:
+            upload_id = client.upload_file(path, progress_cb=upload_cb)
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
         job = client.create_job(upload_id, profile, container=container, audio=audio)
         job_id = job["id"]
@@ -454,15 +529,91 @@ class SophonEncodeVideo(io.ComfyNode):
         if final["status"] != "completed":
             raise RuntimeError(f"Sophon job {job_id} ended with status {final['status']}: {final.get('error')}")
         url = client.get_output_url(job_id)
-        local = ""
         if download:
             local = client.download_output(job_id, _resolve_output_dir(output_dir))
+            video = VideoFromFile(local)
+        else:
+            local = ""
+            video = _fetch_video_from_url(url)
         if encode_bar is not None:
             encode_bar.update_absolute(100, 100)
         payload = _build_preview_ui(local, final)
         if payload is not None:
-            return io.NodeOutput(job_id, url, local, ui=payload)
-        return io.NodeOutput(job_id, url, local)
+            return io.NodeOutput(job_id, url, local, video, ui=payload)
+        return io.NodeOutput(job_id, url, local, video)
+
+
+# ─── SophonCompare ───────────────────────────────────────────────────────
+
+def _materialize_for_compare(video_input: Any, label: str, out_root: Path) -> tuple[dict[str, Any], int, float]:
+    """Save a VideoInput into ComfyUI's output tree so /view can serve it to
+    the frontend. Returns (preview_descriptor, file_size_bytes, duration_seconds)."""
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in label) or "video"
+    target = out_root / f"{safe}.mp4"
+    video_input.save_to(str(target), format=VideoContainer.MP4)
+    preview = _preview_result(str(target))
+    assert preview is not None, "sophon_compare output must be under ComfyUI's output dir"
+    size = target.stat().st_size
+    try:
+        duration = float(video_input.get_duration())
+    except Exception:
+        duration = 0.0
+    return preview, size, duration
+
+
+class SophonCompare(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="SophonCompare",
+            display_name="Sophon Compare",
+            category="sophon",
+            description="Side-by-side comparison of two videos (e.g., original vs Sophon-encoded). Playback is synced.",
+            is_output_node=True,
+            inputs=[
+                io.Video.Input("original", tooltip="Source video (e.g., ByteDance Seedance output, or a load-video node)."),
+                io.Video.Input("encoded", tooltip="Encoded video (e.g., Sophon Encode Video's 'video' output)."),
+                io.String.Input("label_original", multiline=False, default="Original"),
+                io.String.Input("label_encoded", multiline=False, default="Sophon"),
+            ],
+            outputs=[],
+        )
+
+    @classmethod
+    def fingerprint_inputs(cls, **kwargs) -> Any:
+        return _nonce()
+
+    @classmethod
+    def execute(
+        cls,
+        original: Any,
+        encoded: Any,
+        label_original: str,
+        label_encoded: str,
+    ) -> io.NodeOutput:
+        out_root = Path(_default_output_dir()) / "sophon_compare" / uuid.uuid4().hex[:8]
+        out_root.mkdir(parents=True, exist_ok=True)
+        left, left_size, left_dur = _materialize_for_compare(original, label_original, out_root)
+        right, right_size, right_dur = _materialize_for_compare(encoded, label_encoded, out_root)
+
+        def kbps(size: int, dur: float) -> float:
+            return (size * 8) / dur / 1000.0 if dur > 0 else 0.0
+
+        savings = (1.0 - float(right_size) / float(left_size)) * 100.0 if left_size > 0 else 0.0
+        return io.NodeOutput(ui={
+            "sophon_compare": [{
+                "left": left,
+                "right": right,
+                "label_left": label_original,
+                "label_right": label_encoded,
+                "size_left": int(left_size),
+                "size_right": int(right_size),
+                "bitrate_left_kbps": kbps(left_size, left_dur),
+                "bitrate_right_kbps": kbps(right_size, right_dur),
+                "duration_seconds": left_dur or right_dur or 0.0,
+                "savings_pct": savings,
+            }],
+        })
 
 
 class SophonExtension(ComfyExtension):
@@ -473,4 +624,5 @@ class SophonExtension(ComfyExtension):
             SophonJobStatus,
             SophonDownloadOutput,
             SophonEncodeVideo,
+            SophonCompare,
         ]
