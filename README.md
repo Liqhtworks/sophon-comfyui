@@ -20,7 +20,7 @@ The installer will:
 2. Clone the repo into `<base-path>/custom_nodes/ComfyUI-Sophon` (or pull latest if it already exists)
 3. `pip install -e` into ComfyUI's bundled Python venv so the V3 entry point registers
 
-Then **fully close and relaunch ComfyUI Desktop**. Search `Sophon` in the node menu — you should see all five nodes.
+Then **fully close and relaunch ComfyUI Desktop**. Search `Sophon` in the node menu — you should see all six nodes.
 
 If auto-detect fails (non-standard install location), pass the path explicitly:
 
@@ -44,7 +44,7 @@ pip install -e ComfyUI-Sophon
 
 Paste this prompt into your coding agent to have it install the node for you:
 
-> Install the ComfyUI-Sophon custom node into my local ComfyUI Desktop instance. Clone `https://github.com/hamchowderr/ComfyUI-Sophon` to a working directory, then run `python ComfyUI-Sophon/scripts/install.py`. If auto-detection fails, find my ComfyUI Desktop base path from `%APPDATA%\ComfyUI\config.json` on Windows (or equivalent on macOS/Linux) and pass it via `--base-path`. After install, confirm the five Sophon nodes load without errors and tell me to restart ComfyUI Desktop.
+> Install the ComfyUI-Sophon custom node into my local ComfyUI Desktop instance. Clone `https://github.com/hamchowderr/ComfyUI-Sophon` to a working directory, then run `python ComfyUI-Sophon/scripts/install.py`. If auto-detection fails, find my ComfyUI Desktop base path from `%APPDATA%\ComfyUI\config.json` on Windows (or equivalent on macOS/Linux) and pass it via `--base-path`. After install, confirm the six Sophon nodes load without errors and tell me to restart ComfyUI Desktop.
 
 ---
 
@@ -71,10 +71,29 @@ Or paste the key into any node's `api_key` field at the workflow level (saved in
 | `Sophon Upload` | Chunked upload of a local video → `upload_id` |
 | `Sophon Encode` | Submit job for an `upload_id`, poll to completion → `job_id`, `status`, `output_url` |
 | `Sophon Job Status` | Non-blocking status check for an existing `job_id` |
-| `Sophon Download Output` | Resolve signed URL and optionally save to ComfyUI's output dir |
-| `Sophon Encode Video (one-shot)` | Upload → encode → download in a single node |
+| `Sophon Download Output` | Resolve signed URL and optionally save to ComfyUI's output dir → `output_url`, `local_path`, `video` |
+| `Sophon Encode Video (one-shot)` | Upload → encode → download in a single node → `job_id`, `output_url`, `local_path`, `video` |
+| `Sophon Compare` | Side-by-side synced playback of two videos with file size / bitrate / savings % |
 
-The `Sophon Upload` and `Sophon Encode Video` nodes show a **dropdown of videos from ComfyUI's `input/` folder** — drop any `.mp4`, `.mov`, `.mkv`, `.webm`, `.avi`, `.m4v`, `.mpg`, `.mpeg`, `.ts`, or `.flv` file there and it appears in the dropdown on next open.
+### Source options (Upload / Encode Video)
+
+Both nodes accept a source video two ways:
+
+1. **File picker**: dropdown of videos from ComfyUI's `input/` folder — drop any `.mp4`, `.mov`, `.mkv`, `.webm`, `.avi`, `.m4v`, `.mpg`, `.mpeg`, `.ts`, or `.flv` file there and it appears in the dropdown on next open.
+2. **`video_input` socket** (optional `VIDEO` type): connect the output of any node that produces `VIDEO` — e.g. ByteDance Seedance, Wan, Kling, LTXV, or core ComfyUI load-video nodes. When connected, the socket takes precedence over the dropdown.
+
+### VIDEO outputs (Download Output / Encode Video)
+
+Both nodes now emit a `VIDEO` output wrapping the encoded result, so it flows into any VIDEO-typed graph downstream (including `Sophon Compare`, save-video, or further processing nodes). When `download=True` this is a `VideoFromFile(local_path)`; when `download=False` the bytes are fetched in-memory so the output is still valid.
+
+### Sophon Compare
+
+Two `VIDEO` inputs (`original`, `encoded`) render side-by-side inside the node. Playback, pause, seek, and playback rate are mirrored between the two `<video>` elements. Below each video the widget reports file size (e.g. `8.21 MB`) and bitrate (e.g. `3,412 kbps`); below both it reports overall savings %. Typical graph:
+
+```
+ByteDance Seedance ─┬───────────────────────────────────► Sophon Compare (original)
+                    └─► Sophon Encode Video ─ video ────► Sophon Compare (encoded)
+```
 
 Progress bars are wired into the upload and poll loops via `comfy.utils.ProgressBar`.
 
@@ -82,10 +101,14 @@ Progress bars are wired into the upload and poll loops via `comfy.utils.Progress
 
 ## Profiles
 
-8-bit (default, universal decoder compatibility):
+Automatic:
+
+- `sophon-auto` — server-side heuristic picks a profile based on source characteristics (resolution, bit depth, content class). Recommended when you don't know which profile fits.
+
+8-bit (universal decoder compatibility):
 
 - `sophon-espresso` — fastest, lowest compression
-- `sophon-cortado` — balanced
+- `sophon-cortado` — balanced (default)
 - `sophon-americano` — slowest, highest compression
 
 10-bit (HEVC Main10):
@@ -93,6 +116,8 @@ Progress bars are wired into the upload and poll loops via `comfy.utils.Progress
 - `sophon-espresso-10bit`
 - `sophon-cortado-10bit`
 - `sophon-americano-10bit`
+
+The `effective_profile_id` returned by a completed job tells you which concrete profile `sophon-auto` resolved to.
 
 ---
 
