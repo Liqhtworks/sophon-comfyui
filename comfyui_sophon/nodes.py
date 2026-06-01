@@ -12,7 +12,7 @@ from typing import Any
 from comfy_api.latest import ComfyExtension, VideoFromFile, io
 from comfy_api.latest._util import VideoContainer
 
-from .client import SophonClient
+from .client import SophonClient, _assert_allowed_output_host, resolve_api_key
 
 PROFILES = [
     "sophon-auto",
@@ -23,6 +23,15 @@ PROFILES = [
     "sophon-cortado-10bit",
     "sophon-americano-10bit",
 ]
+
+# The api_key field holds the NAME of an environment variable, never the key
+# itself — ComfyUI serializes widget values into the saved workflow .json, so
+# accepting a name (resolved at runtime) keeps the secret out of the graph.
+_API_KEY_TOOLTIP = (
+    "Name of the environment variable holding your Sophon API key "
+    "(default: SOPHON_API_KEY). Enter the variable NAME, not the key itself — "
+    "this keeps your key out of the saved workflow. Leave blank for SOPHON_API_KEY."
+)
 
 
 def _default_output_dir() -> str:
@@ -65,12 +74,14 @@ def _preview_result(local_path: str) -> dict | None:
     if subfolder == ".":
         subfolder = ""
     ext = abs_path.suffix.lower().lstrip(".") or "mp4"
+    # Only ComfyUI-relative locators are sent to the browser — the absolute
+    # local path is intentionally omitted (the frontend serves via /view and
+    # never needs it; shipping it would leak the host filesystem layout).
     return {
         "filename": rel.name,
         "subfolder": subfolder,
         "type": io.FolderType.output.value,
         "format": f"video/{ext}",
-        "fullpath": str(abs_path),
     }
 
 
@@ -167,12 +178,16 @@ def _resolve_video_path(video: str) -> str:
 def _fetch_video_from_url(url: str) -> VideoFromFile:
     """Download a (signed) URL into memory and wrap as VideoFromFile. Used when
     the user opted out of saving the encoded output to disk but we still need a
-    VIDEO output for the graph."""
+    VIDEO output for the graph. The host is validated against the B2 allowlist
+    and redirects are not followed (mirrors SophonClient.download_output)."""
     import io as _stdio
 
     import requests
 
-    r = requests.get(url, timeout=60)
+    _assert_allowed_output_host(url)
+    r = requests.get(url, timeout=60, allow_redirects=False)
+    if r.is_redirect or r.status_code in (301, 302, 303, 307, 308):
+        raise RuntimeError("output host issued an unexpected redirect")
     r.raise_for_status()
     return VideoFromFile(_stdio.BytesIO(r.content))
 
@@ -195,7 +210,8 @@ def _materialize_video_input(video_input: Any) -> str:
 
 
 def _client(api_key: str) -> SophonClient:
-    return SophonClient.from_env(override=api_key or None)
+    # `api_key` is the NAME of an env var (default SOPHON_API_KEY), not the key.
+    return SophonClient.from_env(override=resolve_api_key(api_key))
 
 
 def _nonce() -> str:
@@ -236,7 +252,7 @@ class SophonUpload(io.ComfyNode):
                     tooltip="Connect a VIDEO output from an upstream node (e.g. Seedance). Takes precedence over 'video'.",
                 ),
                 io.String.Input("mime_type", multiline=False, default="video/mp4"),
-                io.String.Input("api_key", multiline=False, default="", tooltip="Bearer API key. Leave empty to use $SOPHON_API_KEY."),
+                io.String.Input("api_key", multiline=False, default="", tooltip=_API_KEY_TOOLTIP),
             ],
             outputs=[io.String.Output(display_name="upload_id")],
         )
@@ -295,7 +311,7 @@ class SophonEncode(io.ComfyNode):
                 io.String.Input("webhook_ids", multiline=False, default="", tooltip="Comma-separated webhook IDs (optional)."),
                 io.Int.Input("poll_interval", default=2, min=1, max=60),
                 io.Int.Input("timeout_seconds", default=1800, min=30, max=7200),
-                io.String.Input("api_key", multiline=False, default=""),
+                io.String.Input("api_key", multiline=False, default="", tooltip=_API_KEY_TOOLTIP),
             ],
             outputs=[
                 io.String.Output(display_name="job_id"),
@@ -353,7 +369,7 @@ class SophonJobStatus(io.ComfyNode):
             description="One-shot status check for an existing job_id.",
             inputs=[
                 io.String.Input("job_id", multiline=False),
-                io.String.Input("api_key", multiline=False, default=""),
+                io.String.Input("api_key", multiline=False, default="", tooltip=_API_KEY_TOOLTIP),
             ],
             outputs=[
                 io.String.Output(display_name="status"),
@@ -397,7 +413,7 @@ class SophonDownloadOutput(io.ComfyNode):
                 io.String.Input("job_id", multiline=False),
                 io.Boolean.Input("download", default=True, tooltip="If true, save to ComfyUI output dir."),
                 io.String.Input("output_dir", multiline=False, default="", tooltip="Override output dir. Empty = ComfyUI default."),
-                io.String.Input("api_key", multiline=False, default=""),
+                io.String.Input("api_key", multiline=False, default="", tooltip=_API_KEY_TOOLTIP),
             ],
             outputs=[
                 io.String.Output(display_name="output_url"),
@@ -460,7 +476,7 @@ class SophonEncodeVideo(io.ComfyNode):
                 io.String.Input("output_dir", multiline=False, default=""),
                 io.Int.Input("poll_interval", default=2, min=1, max=60),
                 io.Int.Input("timeout_seconds", default=1800, min=30, max=7200),
-                io.String.Input("api_key", multiline=False, default=""),
+                io.String.Input("api_key", multiline=False, default="", tooltip=_API_KEY_TOOLTIP),
             ],
             outputs=[
                 io.String.Output(display_name="job_id"),

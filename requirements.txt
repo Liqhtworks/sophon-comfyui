@@ -1,1 +1,5 @@
-requests>=2.31
+# Pinned for blind installs (ComfyUI Manager runs `pip install -r` on this file).
+# Floor avoids CVE-2024-47081 (requests < 2.32.4 leaks .netrc credentials to
+# arbitrary hosts on crafted URLs). Bump deliberately after reviewing the
+# changelog. See SECURITY.md for the supply-chain policy.
+requests==2.32.5

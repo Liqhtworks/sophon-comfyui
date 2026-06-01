@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Otaku Solutions" }]
-dependencies = ["requests>=2.31"]
+# Floor avoids CVE-2024-47081 (requests < 2.32.4); cap the major to keep blind
+# `pip install -e .` installs from silently jumping a breaking release.
+dependencies = ["requests>=2.32.4,<3"]
 
 [project.urls]
 Homepage = "https://sophon.liqhtworks.xyz"
