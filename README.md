@@ -66,11 +66,13 @@ export SOPHON_API_KEY=sk_...
 export SOPHON_BASE_URL=https://api.liqhtworks.xyz
 ```
 
-**Prefer the environment variable.** You *can* paste the key into any node's
-`api_key` field instead, but ComfyUI saves widget values into the workflow
-`.json` **in plaintext** — so that workflow now carries your billing-identity
-key. Never share or commit a workflow that contains a real key. The env var
-keeps the key out of saved graphs entirely.
+**The key always comes from an environment variable.** Each node has an
+`api_key` field, but it holds the *name* of the env var (default
+`SOPHON_API_KEY`) — **not the key itself**. The node resolves the value at run
+time, so your key is never written into the saved workflow `.json`. Leave the
+field blank to use `SOPHON_API_KEY`, or enter a different variable name (e.g.
+`SOPHON_API_KEY_PROD`) if you keep several. Pasting a raw key into the field is
+rejected with a clear error — by design.
 
 ---
 
@@ -175,8 +177,8 @@ It does a constant-time HMAC-SHA256 compare **and** rejects stale deliveries
 This is a third-party node — see [SECURITY.md](SECURITY.md) for the full policy
 and **private** vulnerability reporting. Highlights of how the client protects you:
 
-- **API key** is read from `$SOPHON_API_KEY` by default; typing it into a node
-  persists it into the workflow `.json` (see the API-key note above).
+- **API key** is always resolved from an environment variable; the node field
+  holds the variable *name*, never the key, so secrets never enter the workflow.
 - **HTTPS enforced** — the client refuses a non-`https://` base URL unless you
   explicitly opt in (`SOPHON_ALLOW_INSECURE=1`), so the key isn't sent in clear.
 - **Output downloads** are fetched only from Backblaze B2 hosts

@@ -12,7 +12,7 @@ from typing import Any
 from comfy_api.latest import ComfyExtension, VideoFromFile, io
 from comfy_api.latest._util import VideoContainer
 
-from .client import SophonClient, _assert_allowed_output_host
+from .client import SophonClient, _assert_allowed_output_host, resolve_api_key
 
 PROFILES = [
     "sophon-auto",
@@ -24,13 +24,13 @@ PROFILES = [
     "sophon-americano-10bit",
 ]
 
-# Shared, security-aware tooltip for every node's api_key field. ComfyUI
-# persists widget values into the saved workflow .json, so a key typed here is
-# stored in plaintext — steer users to the env var and warn loudly.
+# The api_key field holds the NAME of an environment variable, never the key
+# itself — ComfyUI serializes widget values into the saved workflow .json, so
+# accepting a name (resolved at runtime) keeps the secret out of the graph.
 _API_KEY_TOOLTIP = (
-    "Bearer API key. Leave empty to use $SOPHON_API_KEY (recommended). "
-    "WARNING: a key typed here is saved into the workflow .json in plaintext — "
-    "never share or commit a workflow that contains a real key."
+    "Name of the environment variable holding your Sophon API key "
+    "(default: SOPHON_API_KEY). Enter the variable NAME, not the key itself — "
+    "this keeps your key out of the saved workflow. Leave blank for SOPHON_API_KEY."
 )
 
 
@@ -210,7 +210,8 @@ def _materialize_video_input(video_input: Any) -> str:
 
 
 def _client(api_key: str) -> SophonClient:
-    return SophonClient.from_env(override=api_key or None)
+    # `api_key` is the NAME of an env var (default SOPHON_API_KEY), not the key.
+    return SophonClient.from_env(override=resolve_api_key(api_key))
 
 
 def _nonce() -> str:

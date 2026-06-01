@@ -73,6 +73,35 @@ class SophonError(RuntimeError):
         super().__init__(f"Sophon {status} {code}: {message}")
 
 
+def resolve_api_key(env_var: str | None) -> str:
+    """Resolve the Sophon API key from an environment variable NAME.
+
+    Nodes expose a field that holds the *name* of an env var (default
+    ``SOPHON_API_KEY``), never the key itself — so the secret is never
+    serialized into a saved workflow .json. A pasted raw key fails loudly
+    instead of silently leaking into the graph.
+    """
+    name = (env_var or "").strip() or "SOPHON_API_KEY"
+    if not name.isidentifier():
+        raise SophonError(
+            400,
+            {"error": {"code": "bad_api_key_field",
+                       "message": "The api_key field expects the NAME of an environment variable "
+                                  "(e.g. SOPHON_API_KEY), not the key itself. Set your key as an env "
+                                  "var and put its name here (or leave blank for SOPHON_API_KEY)."}},
+        )
+    val = os.environ.get(name, "").strip()
+    if not val:
+        raise SophonError(
+            401,
+            {"error": {"code": "unauthorized",
+                       "message": f"Environment variable '{name}' is not set. Set your Sophon API key "
+                                  f"there and leave the node field blank (or enter just the variable "
+                                  f"name) — never paste the key into the workflow."}},
+        )
+    return val
+
+
 @dataclass
 class SophonClient:
     api_key: str

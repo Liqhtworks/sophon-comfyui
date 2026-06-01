@@ -9,9 +9,10 @@ ComfyUI project.
 
 - The package sends your video uploads and your Sophon **API key** (a billing
   identity) to `https://api.liqhtworks.xyz`. Treat your API key like a password.
-- Prefer the `SOPHON_API_KEY` environment variable over typing the key into a
-  node field — a key typed into a node is saved into the workflow `.json` in
-  plaintext, and workflows are frequently shared and committed.
+- Your Sophon **API key** is always resolved from an environment variable. The
+  node's `api_key` field holds the *name* of that variable (default
+  `SOPHON_API_KEY`), never the key itself — so the key is never written into the
+  saved workflow `.json` (workflows are frequently shared and committed).
 - Encoded output is fetched only from Backblaze B2 hosts (`*.backblazeb2.com`)
   and written only inside the directory you choose; server-supplied filenames
   are sanitized before any write.
