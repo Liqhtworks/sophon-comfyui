@@ -2,6 +2,12 @@
 
 ComfyUI custom nodes for the [Sophon](https://sophon.liqhtworks.xyz) HEVC encoding API by Liqhtworks. Built against the V3 ComfyUI schema (`comfy_api.latest`) for forward compatibility with Comfy Cloud.
 
+> ⚠️ **Third-party node.** This is a community integration published by Otaku
+> Solutions / Liqhtworks — not affiliated with or maintained by the ComfyUI
+> project. It sends your video and your API key to `api.liqhtworks.xyz`. See
+> [SECURITY.md](SECURITY.md) for the trust boundary and how to report a
+> vulnerability **privately** (don't open a public issue for security bugs).
+
 ---
 
 ## Quick install (one command)
@@ -60,7 +66,11 @@ export SOPHON_API_KEY=sk_...
 export SOPHON_BASE_URL=https://api.liqhtworks.xyz
 ```
 
-Or paste the key into any node's `api_key` field at the workflow level (saved into the workflow JSON). Never commit workflows that contain a real key.
+**Prefer the environment variable.** You *can* paste the key into any node's
+`api_key` field instead, but ComfyUI saves widget values into the workflow
+`.json` **in plaintext** — so that workflow now carries your billing-identity
+key. Never share or commit a workflow that contains a real key. The env var
+keeps the key out of saved graphs entirely.
 
 ---
 
@@ -146,6 +156,9 @@ Maintainer pushes a fix → re-run `python ComfyUI-Sophon/scripts/install.py` �
 The Sophon API uses pre-registered webhooks (`POST /v1/webhooks`) referenced by ID on job creation. This is unsuitable for spinning up a listener inside a ComfyUI workflow. If you maintain a public endpoint, register it once and pass its ID via the `webhook_ids` input — the node still polls so it can return a deterministic result, but your listener will also receive the terminal delivery.
 
 Signature verification helper is exported at `comfyui_sophon.client.verify_webhook`.
+It does a constant-time HMAC-SHA256 compare **and** rejects stale deliveries
+(replay protection): pass the delivery `timestamp` and it enforces a default
+5-minute freshness window (`max_age_seconds`, set `None` to disable).
 
 ---
 
@@ -154,6 +167,23 @@ Signature verification helper is exported at `comfyui_sophon.client.verify_webho
 - All nodes are pure server-side Python with no client↔server messaging, so they satisfy the Cloud/API compatibility requirement.
 - Polling is the default and only reliable completion strategy on Cloud (ephemeral instances cannot accept inbound webhooks).
 - `SOPHON_API_KEY` must be provisioned as a Cloud secret.
+
+---
+
+## Security
+
+This is a third-party node — see [SECURITY.md](SECURITY.md) for the full policy
+and **private** vulnerability reporting. Highlights of how the client protects you:
+
+- **API key** is read from `$SOPHON_API_KEY` by default; typing it into a node
+  persists it into the workflow `.json` (see the API-key note above).
+- **HTTPS enforced** — the client refuses a non-`https://` base URL unless you
+  explicitly opt in (`SOPHON_ALLOW_INSECURE=1`), so the key isn't sent in clear.
+- **Output downloads** are fetched only from Backblaze B2 hosts
+  (`*.backblazeb2.com`), do not follow further redirects, and the
+  server-supplied filename is sanitized and confined to your chosen output dir.
+- **Dependencies** are pinned in `requirements.txt` (floor avoids
+  CVE-2024-47081) for reproducible, known-good blind installs.
 
 ---
 
