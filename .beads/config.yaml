@@ -55,3 +55,6 @@
 
 dolt.shared-server: true
 sync-branch: "beads-sync"
+
+sync:
+    remote: chowderr/comfyui-sophon
